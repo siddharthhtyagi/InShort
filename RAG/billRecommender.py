@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 class BillRecommender:
     """Generates recommendations for users based on their profile and interests"""
-    
+
     def __init__(self, pinecone_api_key: str, index_name: str = "bills-index", user_profile: Dict = None):
         self.pc = Pinecone(api_key=pinecone_api_key)
         self.index = self.pc.Index(index_name)
@@ -37,46 +37,81 @@ class BillRecommender:
 
     def generate_summary_with_groq(self, bill_info: Dict) -> str:
         """Generate a personalized summary using Groq when not available in metadata"""
+        # Create a news-style prompt for summary generation
+        prompt = f"""
+        You are InShort, an AI that creates personalized bill summaries for a {self.user_profile['age']}-year-old {self.user_profile['occupation']} from {self.user_profile['location']} who is interested in {', '.join(self.user_profile['interests'])}.
+
+        BILL INFORMATION:
+        Title: {bill_info.get('title', 'Unknown')}
+        Sponsor: {bill_info.get('sponsor', 'Unknown')}
+        Policy Area: {bill_info.get('policy_area', 'Unknown')}
+        Latest Action: {bill_info.get('latest_action', 'Unknown')}
+
+        TASK:
+        Create a news-style summary of this bill that:
+        1. Explains what the bill does in clear, objective terms
+        2. Describes why this bill is relevant to someone who is {self.user_profile['age']} years old, works as a {self.user_profile['occupation']}, lives in {self.user_profile['location']}, and cares about {', '.join(self.user_profile['interests'])}
+        3. Uses a professional, news-like tone (no "Hey" or direct addressing)
+        4. Keeps it to 2-3 sentences maximum
+        5. Focuses on impact and relevance to the user's demographic and interests
+
+        EXAMPLE STYLE:
+        "This bill expands Medicare coverage for occupational therapy services, which could benefit seniors and individuals with disabilities. For residents of [state] working in [occupation], this legislation may impact healthcare accessibility and costs in the region. The bill aligns with broader healthcare policy discussions that affect [demographic]."
+
+        NEWS-STYLE SUMMARY:
+        """
+
+        # Try with Groq first
         try:
-            # Create a news-style prompt for summary generation
-            prompt = f"""
-            You are InShort, an AI that creates personalized bill summaries for a {self.user_profile['age']}-year-old {self.user_profile['occupation']} from {self.user_profile['location']} who is interested in {', '.join(self.user_profile['interests'])}.
+            import time
+            max_retries = 3
+            retry_delay = 1  # Start with 1 second delay
 
-            BILL INFORMATION:
-            Title: {bill_info.get('title', 'Unknown')}
-            Sponsor: {bill_info.get('sponsor', 'Unknown')}
-            Policy Area: {bill_info.get('policy_area', 'Unknown')}
-            Latest Action: {bill_info.get('latest_action', 'Unknown')}
+            for attempt in range(max_retries):
+                try:
+                    response = self.groq_client.chat.completions.create(
+                        model="llama3-8b-8192",
+                        messages=[
+                            {"role": "system", "content": f"You are InShort, a news-style AI that creates personalized bill summaries. Focus on explaining relevance to the user's demographic and interests without directly addressing them."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.7,
+                        max_tokens=200
+                    )
 
-            TASK:
-            Create a news-style summary of this bill that:
-            1. Explains what the bill does in clear, objective terms
-            2. Describes why this bill is relevant to someone who is {self.user_profile['age']} years old, works as a {self.user_profile['occupation']}, lives in {self.user_profile['location']}, and cares about {', '.join(self.user_profile['interests'])}
-            3. Uses a professional, news-like tone (no "Hey" or direct addressing)
-            4. Keeps it to 2-3 sentences maximum
-            5. Focuses on impact and relevance to the user's demographic and interests
+                    return response.choices[0].message.content.strip()
+                except Exception as e:
+                    if "no healthy upstream" in str(e).lower() and attempt < max_retries - 1:
+                        print(f"Groq connection error (attempt {attempt+1}/{max_retries}): {e}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        raise e
 
-            EXAMPLE STYLE:
-            "This bill expands Medicare coverage for occupational therapy services, which could benefit seniors and individuals with disabilities. For residents of [state] working in [occupation], this legislation may impact healthcare accessibility and costs in the region. The bill aligns with broader healthcare policy discussions that affect [demographic]."
-
-            NEWS-STYLE SUMMARY:
-            """
-            
-            response = self.groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[
-                    {"role": "system", "content": f"You are InShort, a news-style AI that creates personalized bill summaries. Focus on explaining relevance to the user's demographic and interests without directly addressing them."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=200
-            )
-            
-            return response.choices[0].message.content.strip()
-            
         except Exception as e:
             print(f"Error generating personalized summary with Groq: {e}")
-            return f"Unable to generate summary at this time."
+
+            # Fallback to OpenAI if available
+            try:
+                import openai
+                openai_api_key = os.getenv("OPENAI_API_KEY")
+                if openai_api_key:
+                    print("Falling back to OpenAI for summary generation")
+                    client = openai.OpenAI(api_key=openai_api_key)
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": f"You are InShort, a news-style AI that creates personalized bill summaries. Focus on explaining relevance to the user's demographic and interests without directly addressing them."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.7,
+                        max_tokens=200
+                    )
+                    return response.choices[0].message.content.strip()
+            except Exception as fallback_error:
+                print(f"Fallback to OpenAI also failed: {fallback_error}")
+
+            return f"Unable to generate summary at this time. Please try again later."
 
     def recommend_bills(self, user_interests: List[str], top_k: int = 5, min_score: float = 0.5) -> str:
         """Generate bill recommendations based on user's interests"""
@@ -97,13 +132,13 @@ class BillRecommender:
                     match for match in results['matches'] if match['score'] >= min_score
                 ]
                 recommendations.extend(filtered_results)
-        
+
         # Return a formatted string of recommendations
         return self.format_recommendations(recommendations)
 
     def recommend_bills_json(self, user_interests: List[str], top_k: int = 5, min_score: float = 0.5) -> List[Dict]:
         """Generate bill recommendations based on user's interests and return as JSON"""
-        
+
         # Combine user interests and profile information into a focused keyword string
         profile_keywords = [
             self.user_profile.get('occupation', ''),
@@ -133,10 +168,10 @@ class BillRecommender:
         recommendations = [
             match for match in results['matches'] if match['score'] >= min_score
         ]
-        
+
         # Return a list of recommendation dictionaries, sorted by score
         return self.format_recommendations_json(recommendations)
-    
+
     def format_recommendations_json(self, recommendations: List[Dict]) -> List[Dict]:
         """Format recommendations as a list of JSON objects with personalized summaries, generated in parallel."""
         if not recommendations:
@@ -148,7 +183,7 @@ class BillRecommender:
             summary = metadata.get("summary", "")
             if not summary or summary == "No summary available.":
                 summary = self.generate_summary_with_groq(metadata)
-            
+
             return {
                 "id": match.get("id"),
                 "score": match.get("score", 0),
@@ -186,11 +221,11 @@ class BillRecommender:
             sponsor = metadata.get("sponsor", "N/A")
             congress = metadata.get("congress", "N/A")
             summary = metadata.get("summary", "")
-            
+
             # If no summary in metadata, generate one with Groq
             if not summary or summary == "No summary available.":
                 summary = self.generate_summary_with_groq(metadata)
-            
+
             output += f"#{i} - {bill_type.upper()}{bill_number} (Relevance: {score:.1%})\n"
             output += f"📋 {title}\n"
             output += f"👤 {sponsor}\n"
@@ -202,46 +237,81 @@ class BillRecommender:
 
     def get_chat_response(self, user_question: str, bill_info: Dict) -> str:
         """Generate a contextual chat response using Groq"""
+        # Create a detailed, persona-driven prompt for Groq
+        prompt = f"""
+        You are InShort, a highly knowledgeable and professional AI legislative assistant. Your user is a {self.user_profile['age']}-year-old {self.user_profile.get('occupation', 'citizen')} from {self.user_profile['location']}, who is interested in {', '.join(self.user_profile['interests'])}.
+
+        You are discussing the following bill:
+        - **Title**: {bill_info.get('title', 'N/A')}
+        - **Bill Number**: {bill_info.get('bill_type', '')}{bill_info.get('bill_number', 'N/A')}
+        - **Sponsor**: {bill_info.get('sponsor', 'N/A')}
+        - **Policy Area**: {bill_info.get('policy_area', 'N/A')}
+        - **Summary**: {bill_info.get('summary', 'No summary available.')}
+        - **Latest Action**: {bill_info.get('latest_action', 'N/A')}
+
+        The user has asked the following question:
+        "{user_question}"
+
+        Your task is to provide a clear, concise, and helpful answer that directly addresses the user's question while keeping their profile in mind.
+        - If the question is about the bill's impact, relate it to their age, location, or interests.
+        - If the question is technical, explain it in simple terms.
+        - Maintain a professional, objective, and news-like tone. Do not be overly conversational.
+        - Base your answer *only* on the provided bill information. Do not invent details. If the information is not available, state that clearly.
+
+        Provide a direct answer to the user's question.
+        """
+
+        # Try with Groq first
         try:
-            # Create a detailed, persona-driven prompt for Groq
-            prompt = f"""
-            You are InShort, a highly knowledgeable and professional AI legislative assistant. Your user is a {self.user_profile['age']}-year-old {self.user_profile.get('occupation', 'citizen')} from {self.user_profile['location']}, who is interested in {', '.join(self.user_profile['interests'])}.
+            import time
+            max_retries = 3
+            retry_delay = 1  # Start with 1 second delay
 
-            You are discussing the following bill:
-            - **Title**: {bill_info.get('title', 'N/A')}
-            - **Bill Number**: {bill_info.get('bill_type', '')}{bill_info.get('bill_number', 'N/A')}
-            - **Sponsor**: {bill_info.get('sponsor', 'N/A')}
-            - **Policy Area**: {bill_info.get('policy_area', 'N/A')}
-            - **Summary**: {bill_info.get('summary', 'No summary available.')}
-            - **Latest Action**: {bill_info.get('latest_action', 'N/A')}
+            for attempt in range(max_retries):
+                try:
+                    response = self.groq_client.chat.completions.create(
+                        model="llama3-8b-8192",
+                        messages=[
+                            {"role": "system", "content": "You are InShort, an expert AI legislative assistant."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.5,
+                        max_tokens=300
+                    )
 
-            The user has asked the following question:
-            "{user_question}"
-
-            Your task is to provide a clear, concise, and helpful answer that directly addresses the user's question while keeping their profile in mind.
-            - If the question is about the bill's impact, relate it to their age, location, or interests.
-            - If the question is technical, explain it in simple terms.
-            - Maintain a professional, objective, and news-like tone. Do not be overly conversational.
-            - Base your answer *only* on the provided bill information. Do not invent details. If the information is not available, state that clearly.
-
-            Provide a direct answer to the user's question.
-            """
-
-            response = self.groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[
-                    {"role": "system", "content": "You are InShort, an expert AI legislative assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                max_tokens=300
-            )
-
-            return response.choices[0].message.content.strip()
+                    return response.choices[0].message.content.strip()
+                except Exception as e:
+                    if "no healthy upstream" in str(e).lower() and attempt < max_retries - 1:
+                        print(f"Groq connection error (attempt {attempt+1}/{max_retries}): {e}")
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        raise e
 
         except Exception as e:
             print(f"Error generating chat response with Groq: {e}")
-            return "I am sorry, but I encountered an error trying to process your request."
+
+            # Fallback to OpenAI if available
+            try:
+                import openai
+                openai_api_key = os.getenv("OPENAI_API_KEY")
+                if openai_api_key:
+                    print("Falling back to OpenAI for chat response")
+                    client = openai.OpenAI(api_key=openai_api_key)
+                    response = client.chat.completions.create(
+                        model="gpt-3.5-turbo",
+                        messages=[
+                            {"role": "system", "content": "You are InShort, an expert AI legislative assistant."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.5,
+                        max_tokens=300
+                    )
+                    return response.choices[0].message.content.strip()
+            except Exception as fallback_error:
+                print(f"Fallback to OpenAI also failed: {fallback_error}")
+
+            return "I am sorry, but I encountered an error trying to process your request. Please try again later."
 
 
 # Example usage
@@ -249,7 +319,7 @@ class BillRecommender:
 def main():
     # Load environment variables
     load_dotenv()
-    
+
     # Sample user profiles for demonstration
     user_profiles = [
         {
@@ -286,14 +356,14 @@ def main():
         print(f"\n{'='*60}")
         print(f"🧑‍💼 Testing for {user_profile['name']} ({user_profile['age']}yo, {user_profile['location']}, {user_profile['occupation']})")
         print(f"{'='*60}")
-        
+
         # Initialize recommender with user profile
         recommender = BillRecommender(pinecone_api_key, index_name="bills-index", user_profile=user_profile)
 
         # Get recommendations based on user's interests
         recommendations = recommender.recommend_bills(user_profile['interests'], top_k=3, min_score=0.1)
         print(recommendations)
-        
+
         # Get JSON recommendations
         json_recommendations = recommender.recommend_bills_json(user_profile['interests'], top_k=3, min_score=0.1)
         import json

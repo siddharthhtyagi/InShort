@@ -406,3 +406,63 @@ You can modify the `BillRecommender` class to:
 2. **Customize Summaries**: Modify the Groq prompt for different summary styles
 3. **Add User Profiles**: Integrate with the personalized summarizer
 4. **Filter Results**: Add additional filtering based on bill status, date, etc. 
+# InShort Backend
+
+This is the backend server for the InShort app, which provides API endpoints for the iOS app to communicate with.
+
+## Setup and Running
+
+1. Install the required dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+
+2. Create a `.env` file with your API keys (see `example.env` for reference).
+
+3. Run the FastAPI server:
+   ```
+   uvicorn api:app --reload --host 0.0.0.0 --port 8000
+   ```
+
+   This will start the server on `http://localhost:8000`.
+
+## API Endpoints
+
+- `/chat/`: Chat with the bill agent
+- `/recommendations/`: Get bill recommendations based on user profile
+- `/bills/`: Get all bills
+- `/bills/details/{bill_id}`: Get details for a specific bill
+- `/bills/like/{bill_id}`: Like a bill
+- `/bills/dislike/{bill_id}`: Dislike a bill
+- `/bills/subscribe/{bill_id}`: Subscribe to a bill
+- `/bills/unsubscribe/{bill_id}`: Unsubscribe from a bill
+
+## Troubleshooting Swift-Python Communication
+
+If you're experiencing issues with the Swift app communicating with the Python backend:
+
+1. Make sure the backend server is running on the correct port (default: 8000).
+
+2. Check that the Swift app is using the correct API URL:
+   - For local development: `http://localhost:8000`
+   - For production: `https://test.rudolfmetro.it`
+
+3. Ensure the request format matches what the API expects:
+   - The chat endpoint expects a JSON object with `user_input`, `session_id`, and `user_profile` fields.
+   - The `user_profile` should include fields like `name`, `age`, `gender`, `location`, `interests`, etc.
+
+4. Check the console logs in Xcode for detailed error messages.
+
+5. If using a simulator, make sure it can access localhost (this should work by default).
+
+6. If using a physical device on the same network as the server, use the computer's local IP address instead of localhost.
+
+## Chatbot Implementation
+
+The chatbot functionality is implemented using LangGraph and LangChain. The main components are:
+
+- `inShort_agent.py`: Contains the agent graph definition and logic for processing user input.
+- `api.py`: Contains the FastAPI endpoints, including the `/chat/` endpoint that interfaces with the agent.
+- `fetch_bills.py`: Contains tools for fetching bill information that the agent can use.
+
+The agent uses a system message that includes the user's profile to personalize responses about bills and legislation.
