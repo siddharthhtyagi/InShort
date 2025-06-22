@@ -103,23 +103,36 @@ class BillRecommender:
 
     def recommend_bills_json(self, user_interests: List[str], top_k: int = 5, min_score: float = 0.5) -> List[Dict]:
         """Generate bill recommendations based on user's interests and return as JSON"""
-        recommendations = []
-        for interest in user_interests:
-            # Generate embedding for each interest
-            interest_embedding = self.generate_embeddings(interest)
-            if interest_embedding:
-                # Search Pinecone for bills matching this interest
-                results = self.index.query(
-                    vector=interest_embedding,
-                    top_k=top_k,
-                    include_metadata=True,
-                    include_values=False
-                )
-                # Filter results by minimum score
-                filtered_results = [
-                    match for match in results['matches'] if match['score'] >= min_score
-                ]
-                recommendations.extend(filtered_results)
+        
+        # Combine user interests and profile information into a focused keyword string
+        profile_keywords = [
+            self.user_profile.get('occupation', ''),
+            self.user_profile.get('location', '')
+        ]
+        # Filter out any empty strings from the profile keywords
+        profile_keywords = [keyword for keyword in profile_keywords if keyword]
+
+        # Join interests and profile keywords to form a powerful query
+        query_text = ' '.join(user_interests + profile_keywords)
+
+        # Generate a single embedding for the combined query
+        query_embedding = self.generate_embeddings(query_text)
+
+        if not query_embedding:
+            return []
+
+        # Search Pinecone for bills matching the combined query
+        results = self.index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            include_metadata=True,
+            include_values=False
+        )
+
+        # Filter results by minimum score
+        recommendations = [
+            match for match in results['matches'] if match['score'] >= min_score
+        ]
         
         # Return a list of recommendation dictionaries
         return self.format_recommendations_json(recommendations)
