@@ -15,6 +15,24 @@ if not pinecone_api_key:
     raise RuntimeError("PINECONE_API_KEY not found in environment variables")
 
 app = FastAPI()
+agent_graph = agent.create_agent_graph()
+
+
+#── Models ─────────────────────────────────────────────────────────────────
+class UserProfile(BaseModel):
+    name: str = "User"
+    age: int = 30
+    location: str = "United States"
+    interests: List[str] = Field(..., example=["student loans", "healthcare"])
+    occupation: str = "citizen"
+    id: str = "default-user-id"
+    friends: List[Dict[str, Any]] = []
+    subscriptions: List[Dict[str, Any]] = []
+
+class ChatRequest(BaseModel):
+    user_input: str
+    session_id: str
+    user_profile: Dict[str, Any]
 
 #── Models ─────────────────────────────────────────────────────────────────
 class Bill(BaseModel):
@@ -35,20 +53,7 @@ class Bill(BaseModel):
     policyArea: Optional[str] = None
     latestAction: Optional[str] = None
 
-class UserProfile(BaseModel):
-    name: str = "User"
-    age: int = 30
-    location: str = "United States"
-    interests: List[str] = Field(..., example=["student loans", "healthcare"])
-    occupation: str = "citizen"
-    id: str = "default-user-id"
-    friends: List[Dict[str, Any]] = []
-    subscriptions: List[Dict[str, Any]] = []
 
-class ChatRequest(BaseModel):
-    user_input: str
-    session_id: str
-    user_profile: Dict[str, Any]
 
 #── Fixture loader ─────────────────────────────────────────────────────────
 def load_bills() -> Dict[str, Bill]:
