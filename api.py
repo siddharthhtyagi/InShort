@@ -15,24 +15,8 @@ if not pinecone_api_key:
     raise RuntimeError("PINECONE_API_KEY not found in environment variables")
 
 app = FastAPI()
-agent_graph = agent.create_agent_graph()
 
 #── Models ─────────────────────────────────────────────────────────────────
-class UserProfile(BaseModel):
-    name: str = "User"
-    age: int = 30
-    location: str = "United States"
-    interests: List[str] = Field(..., example=["student loans", "healthcare"])
-    occupation: str = "citizen"
-    id: str = "default-user-id"
-    friends: List[Dict[str, Any]] = []
-    subscriptions: List[Dict[str, Any]] = []
-
-class ChatRequest(BaseModel):
-    user_input: str
-    session_id: str
-    user_profile: Dict[str, Any]
-
 class Bill(BaseModel):
     id: str
     title: str
@@ -50,6 +34,21 @@ class Bill(BaseModel):
     congress: Optional[str] = None
     policyArea: Optional[str] = None
     latestAction: Optional[str] = None
+
+class UserProfile(BaseModel):
+    name: str = "User"
+    age: int = 30
+    location: str = "United States"
+    interests: List[str] = Field(..., example=["student loans", "healthcare"])
+    occupation: str = "citizen"
+    id: str = "default-user-id"
+    friends: List[Dict[str, Any]] = []
+    subscriptions: List[Dict[str, Any]] = []
+
+class ChatRequest(BaseModel):
+    user_input: str
+    session_id: str
+    user_profile: Dict[str, Any]
 
 #── Fixture loader ─────────────────────────────────────────────────────────
 def load_bills() -> Dict[str, Bill]:
@@ -72,9 +71,9 @@ def load_bills() -> Dict[str, Bill]:
             title=bd.get("title",""),
             summary=bd.get("summary",""),
             sponsor=bd.get("sponsor",""),
-            billNumber=num,
-            billType=typ,
-            congress=cong,
+            billNumber=bd.get("number"),
+            billType=bd.get("type"),
+            congress=str(bd.get("congress","")),
             policyArea=bd.get("policyArea"),
             latestAction=bd.get("latestAction"),
             dateIntroduced=bd.get("introducedDate"),
@@ -90,13 +89,12 @@ BILLS: Dict[str, Bill] = load_bills()
 def normalize_bill_id(bill_id: str) -> (str,str,str):
     """
     Accept either "119-HR-3076" or "bill_119_HR-3076" or "bill_119_HRHR-785",
-    return (congress, bill_type, bill_number).
+    and return (congress, bill_type, bill_number).
     """
     if bill_id.startswith("bill_"):
-        # bill_<congress>_<type>-<number>
         try:
             _, cong, tail = bill_id.split("_", 2)
-            typ, num = tail.split("-",1)
+            typ, num = tail.split("-", 1)
         except ValueError:
             raise HTTPException(status_code=404, detail="Bill not found")
     else:
@@ -107,12 +105,18 @@ def normalize_bill_id(bill_id: str) -> (str,str,str):
     return cong, typ.lower(), num
 
 async def fetch_and_cache(cong: str, typ: str, num: str) -> Bill:
+    """
+    1) Try the in-memory cache
+    2) Otherwise, invoke the get_bill_details tool
+    3) Remap the keys so they exactly match Pydantic's Bill model
+    4) Instantiate and cache a new Bill
+    """
     key = f"{cong}-{typ}-{num}"
     # 1) try cache
     if key in BILLS:
         return BILLS[key]
 
-    # 2) call LangChain tool with single-dict or .invoke
+    # 2) call LangChain tool
     payload = {"congress": cong, "bill_type": typ, "bill_number": num}
     try:
         if hasattr(fb.get_bill_details, "invoke"):
@@ -122,10 +126,41 @@ async def fetch_and_cache(cong: str, typ: str, num: str) -> Bill:
         details = raw if isinstance(raw, dict) else json.loads(raw)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Bill not found ({e})")
+
     if not details or "error" in details:
         raise HTTPException(status_code=404, detail="Bill not found")
 
-    # 3) override id, cache, and return
+    # 3) Remap fields for Pydantic
+    # — sponsor (required)
+    sponsors_list = details.get("sponsors", [])
+    if isinstance(sponsors_list, list) and sponsors_list:
+        details["sponsor"] = sponsors_list[0].get("name", "")
+    else:
+        details["sponsor"] = ""
+
+    # — dateIntroduced
+    if "introduced_date" in details:
+        details["dateIntroduced"] = details.pop("introduced_date")
+
+    # — latestAction & lastUpdated
+    la = details.get("latest_action")
+    if isinstance(la, dict):
+        details["latestAction"] = la.get("text", "")
+        details["lastUpdated"] = la.get("date")
+
+    # — billNumber, billType, policyArea
+    if "bill_number" in details:
+        details["billNumber"] = details.pop("bill_number")
+    if "bill_type" in details:
+        details["billType"] = details.pop("bill_type")
+    if "policy_area" in details:
+        details["policyArea"] = details.pop("policy_area")
+
+    # — congress must be a string
+    if "congress" in details:
+        details["congress"] = str(details["congress"])
+
+    # 4) Instantiate, cache, and return
     details["id"] = key
     bill = Bill(**details)
     BILLS[key] = bill
@@ -138,12 +173,25 @@ async def get_bills():
 
 @app.get("/bills/details/{bill_id}", response_model=Bill)
 async def get_bill_details(bill_id: str):
+    bill_id = bill_id.replace("HRHR", "HR")
+    bill_id = bill_id.replace("SS", "S")
+    bill_id = bill_id.replace("HRESHRES", "HRES")
+
+    bill_id = bill_id.replace("SRES", "SR")
     cong, typ, num = normalize_bill_id(bill_id)
     return await fetch_and_cache(cong, typ, num)
 
 @app.post("/bills/like/{bill_id}", response_model=Bill)
 async def like_bill(bill_id: str):
-    bill_id = bill_id.replace("HRHR", "HR")  # Normalize input
+    # normalize "HRHR" → "HR" if present
+    bill_id = bill_id.replace("HRHR", "HR")
+    bill_id = bill_id.replace("SS", "S")
+    bill_id = bill_id.replace("HRESHRES", "HRES")
+
+    bill_id = bill_id.replace("SRES", "SR")
+
+
+
     cong, typ, num = normalize_bill_id(bill_id)
     bill = await fetch_and_cache(cong, typ, num)
     bill.isLiked = True
@@ -152,7 +200,11 @@ async def like_bill(bill_id: str):
 
 @app.post("/bills/dislike/{bill_id}", response_model=Bill)
 async def dislike_bill(bill_id: str):
-    bill_id = bill_id.replace("HRHR", "HR")  # Normalize input
+    bill_id = bill_id.replace("HRHR", "HR")
+    bill_id = bill_id.replace("SS", "S")
+    bill_id = bill_id.replace("HRESHRES", "HRES")
+
+    bill_id = bill_id.replace("SRES", "SR")
     cong, typ, num = normalize_bill_id(bill_id)
     bill = await fetch_and_cache(cong, typ, num)
     bill.isLiked = False
@@ -161,8 +213,11 @@ async def dislike_bill(bill_id: str):
 
 @app.post("/bills/subscribe/{bill_id}", response_model=Bill)
 async def subscribe_to_bill(bill_id: str):
-    bill_id = bill_id.replace("HRHR", "HR")  # Normalize input
+    bill_id = bill_id.replace("HRHR", "HR")
+    bill_id = bill_id.replace("SS", "S")
+    bill_id = bill_id.replace("HRESHRES", "HRES")
 
+    bill_id = bill_id.replace("SRES", "SR")
     cong, typ, num = normalize_bill_id(bill_id)
     bill = await fetch_and_cache(cong, typ, num)
     bill.isSubscribed = True
@@ -170,8 +225,10 @@ async def subscribe_to_bill(bill_id: str):
 
 @app.post("/bills/unsubscribe/{bill_id}", response_model=Bill)
 async def unsubscribe_from_bill(bill_id: str):
-    bill_id = bill_id.replace("HRHR", "HR")  # Normalize input
-
+    bill_id = bill_id.replace("HRHR", "HR")
+    bill_id = bill_id.replace("SS", "S")
+    bill_id = bill_id.replace("HRESHRES", "HRES")
+    bill_id = bill_id.replace("SRES", "SR")
     cong, typ, num = normalize_bill_id(bill_id)
     bill = await fetch_and_cache(cong, typ, num)
     bill.isSubscribed = False
