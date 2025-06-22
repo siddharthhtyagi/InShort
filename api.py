@@ -42,7 +42,7 @@ async def get_recommendations(user_profile: UserProfile):
         recommender = BillRecommender(
             pinecone_api_key=pinecone_api_key,
             index_name="bills-index",
-            user_profile=user_profile.dict()
+            user_profile=user_profile.model_dump()
         )
 
         # Get recommendations
@@ -80,4 +80,4 @@ def read_root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=8001)
