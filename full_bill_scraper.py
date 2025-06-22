@@ -13,7 +13,6 @@ import requests
 import json
 import time
 import argparse
-from datetime import datetime
 from typing import List, Dict, Optional
 
 API_KEY = "PObLUqeVATUsVD34EGwQagrnuQgBExKjtu1XR4Y6"

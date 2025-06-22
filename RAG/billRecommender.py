@@ -1,5 +1,4 @@
 import os
-import openai
 from typing import List, Dict
 from dotenv import load_dotenv
 from pinecone import Pinecone
