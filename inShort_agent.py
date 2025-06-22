@@ -44,8 +44,8 @@ def graph_builder(thread_id: int):
     graph_builder = StateGraph(State)
         
     llm = ChatOpenAI(model_name="gpt-4o")
-    agent = llm.bind_tools([fb.fetch_congress_bills, fb.search_bills_by_keyword, fb.get_bill_details, fb.get_bills_by_sponsor, ])
-    # fb.get_bills_by_subject
+    agent = llm.bind_tools([fb.fetch_congress_bills, fb.search_bills_by_keyword, fb.get_bill_details, ])
+    # fb.get_bills_by_sponsor, fb.get_bills_by_subject
     def chatbot(state: State):
         message = agent.invoke(state["messages"])
         return {"messages": [message]}
@@ -103,12 +103,13 @@ def get_system_message():
                          fetch_congress_bills, search_bills_by_keyword, \
                          get_bill_details, get_bills_by_sponsor, get_bills_by_subject. \
                          Try to get a lot of bills for more information. \
-                         For each bill, you should get the title, summary, a link to the bill, \
-                         and you should explain how the bill affects the user's life based on their profile. \
+                         For each response, you should get the title, summary, \
+                         you should explain how the bill affects the user's life based on their profile, \
+                         and you should include a link to the bill. \
                          Explain the bill in a way that is easy to understand and not too technical. \
                          If the bill is not relevant to the user's profile, you should say so. \
                          If the bill is relevant to the user's profile, you should say so. \
-                         Explain how the user's life will be inpacted for each bill. \
+                         Explain how the user's life will be impacted by each bill. \
                          The user's profile is {USER_PROFILE}")
 
 def user_interaction(graph: StateGraph, config: dict):
