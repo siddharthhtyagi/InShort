@@ -1,9 +1,9 @@
 import os
-import openai
 from typing import List, Dict
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from groq import Groq
+from concurrent.futures import ThreadPoolExecutor
 
 class BillRecommender:
     """Generates recommendations for users based on their profile and interests"""
@@ -103,45 +103,55 @@ class BillRecommender:
 
     def recommend_bills_json(self, user_interests: List[str], top_k: int = 5, min_score: float = 0.5) -> List[Dict]:
         """Generate bill recommendations based on user's interests and return as JSON"""
-        recommendations = []
-        for interest in user_interests:
-            # Generate embedding for each interest
-            interest_embedding = self.generate_embeddings(interest)
-            if interest_embedding:
-                # Search Pinecone for bills matching this interest
-                results = self.index.query(
-                    vector=interest_embedding,
-                    top_k=top_k,
-                    include_metadata=True,
-                    include_values=False
-                )
-                # Filter results by minimum score
-                filtered_results = [
-                    match for match in results['matches'] if match['score'] >= min_score
-                ]
-                recommendations.extend(filtered_results)
         
-        # Return a list of recommendation dictionaries
+        # Combine user interests and profile information into a focused keyword string
+        profile_keywords = [
+            self.user_profile.get('occupation', ''),
+            self.user_profile.get('location', '')
+        ]
+        # Filter out any empty strings from the profile keywords
+        profile_keywords = [keyword for keyword in profile_keywords if keyword]
+
+        # Join interests and profile keywords to form a powerful query
+        query_text = ' '.join(user_interests + profile_keywords)
+
+        # Generate a single embedding for the combined query
+        query_embedding = self.generate_embeddings(query_text)
+
+        if not query_embedding:
+            return []
+
+        # Search Pinecone for bills matching the combined query
+        results = self.index.query(
+            vector=query_embedding,
+            top_k=top_k,
+            include_metadata=True,
+            include_values=False
+        )
+
+        # Filter results by minimum score
+        recommendations = [
+            match for match in results['matches'] if match['score'] >= min_score
+        ]
+        
+        # Return a list of recommendation dictionaries, sorted by score
         return self.format_recommendations_json(recommendations)
     
     def format_recommendations_json(self, recommendations: List[Dict]) -> List[Dict]:
-        """Format recommendations as a list of JSON objects with personalized summaries"""
+        """Format recommendations as a list of JSON objects with personalized summaries, generated in parallel."""
         if not recommendations:
             return []
 
-        output = []
-        for match in recommendations:
+        def process_match(match):
+            """Processes a single bill, generating a summary if needed."""
             metadata = match.get("metadata", {})
-            score = match.get("score", 0)
             summary = metadata.get("summary", "")
-
-            # If no summary in metadata, generate one with Groq
             if not summary or summary == "No summary available.":
                 summary = self.generate_summary_with_groq(metadata)
             
-            bill_data = {
+            return {
                 "id": match.get("id"),
-                "score": score,
+                "score": match.get("score", 0),
                 "title": metadata.get("title", "Unknown Title"),
                 "bill_number": metadata.get("bill_number", "N/A"),
                 "bill_type": metadata.get("type", "N/A"),
@@ -151,7 +161,13 @@ class BillRecommender:
                 "latest_action": metadata.get("latest_action", "N/A"),
                 "summary": summary
             }
-            output.append(bill_data)
+
+        # Use a thread pool to process all recommendations concurrently
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            output = list(executor.map(process_match, recommendations))
+
+        # Sort the final list by score in descending order
+        output.sort(key=lambda x: x.get('score', 0), reverse=True)
 
         return output
 
@@ -183,6 +199,49 @@ class BillRecommender:
             output += "-" * 50 + "\n"
 
         return output
+
+    def get_chat_response(self, user_question: str, bill_info: Dict) -> str:
+        """Generate a contextual chat response using Groq"""
+        try:
+            # Create a detailed, persona-driven prompt for Groq
+            prompt = f"""
+            You are InShort, a highly knowledgeable and professional AI legislative assistant. Your user is a {self.user_profile['age']}-year-old {self.user_profile.get('occupation', 'citizen')} from {self.user_profile['location']}, who is interested in {', '.join(self.user_profile['interests'])}.
+
+            You are discussing the following bill:
+            - **Title**: {bill_info.get('title', 'N/A')}
+            - **Bill Number**: {bill_info.get('bill_type', '')}{bill_info.get('bill_number', 'N/A')}
+            - **Sponsor**: {bill_info.get('sponsor', 'N/A')}
+            - **Policy Area**: {bill_info.get('policy_area', 'N/A')}
+            - **Summary**: {bill_info.get('summary', 'No summary available.')}
+            - **Latest Action**: {bill_info.get('latest_action', 'N/A')}
+
+            The user has asked the following question:
+            "{user_question}"
+
+            Your task is to provide a clear, concise, and helpful answer that directly addresses the user's question while keeping their profile in mind.
+            - If the question is about the bill's impact, relate it to their age, location, or interests.
+            - If the question is technical, explain it in simple terms.
+            - Maintain a professional, objective, and news-like tone. Do not be overly conversational.
+            - Base your answer *only* on the provided bill information. Do not invent details. If the information is not available, state that clearly.
+
+            Provide a direct answer to the user's question.
+            """
+
+            response = self.groq_client.chat.completions.create(
+                model="llama3-8b-8192",
+                messages=[
+                    {"role": "system", "content": "You are InShort, an expert AI legislative assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.5,
+                max_tokens=300
+            )
+
+            return response.choices[0].message.content.strip()
+
+        except Exception as e:
+            print(f"Error generating chat response with Groq: {e}")
+            return "I am sorry, but I encountered an error trying to process your request."
 
 
 # Example usage

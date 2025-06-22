@@ -248,7 +248,14 @@ def main():
         return
 
     # Initialize processor
-    processor = BillUpsertProcessor(pinecone_api_key, index_name="bills-index")
+    try:
+        processor = BillUpsertProcessor(
+            pinecone_api_key=pinecone_api_key,
+            index_name="bills-index",
+        )
+    except Exception as e:
+        print(f"Error initializing Pinecone: {e}")
+        return
 
     # Process bills
     json_file_path = "../inshort_bills.json"  # Relative to RAG directory

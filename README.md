@@ -1,6 +1,131 @@
-# InShort - AI-Powered Bill Summaries
+# InShort: Personalized Bill Recommendations
 
-InShort provides personalized AI summaries of U.S. bills using Groq's LLM API. This project scrapes bill data from Congress.gov and generates tailored summaries for different user profiles.
+InShort is a mobile application designed to help users discover and understand legislative bills that are relevant to their personal interests and location. Using a powerful AI backend, the app delivers personalized bill recommendations and custom-tailored summaries, making complex legislation accessible and engaging.
+
+![Architecture Diagram](https://mermaid.ink/svg/eyJjb2RlIjoiZ3JhcGggVERcbiAgICBzdWJncmFwaCBGcm9udGVuZCAtIGlPUyBBcHBcbiAgICAgICAgQVtTd2lmdFVJIFZpZXdzXSAtLT4gQltWaWV3TW9kZWxzXTtcbiAgICAgICAgQiAtLT4gQ1tTZXJ2aWNlcyAtIEJpbGxTZXJ2aWNlLCBVc2VyU2VydmljZV07XG4gICAgZW5kXG5cbiAgICBzdWJncmFwaCBCYWNrZW5kIC0gUHl0aG9uIFNlcnZlclxuICAgICAgICBFW0Zhc3RBUEkgRW5kcG9pbnQgL3JlY29tbWVuZGF0aW9ucy9dIC0tPiBGW0JpbGxSZWNvbW1lbmRlcl07XG4gICAgICAgIEYgLS0-IEdbUGluZWNvbmUgVmVjdG9yIERCXTtcbiAgICAgICAgRiAtLT4gSFtPcGVuQUkgZm9yIEVtYmVkZGluZ3NdO1xuICAgICAgICBGIC0tPiBJW0dyb3EgZm9yIFN1bW1hcmllc107XG4gICAgZW5kXG5cbiAgICBzdWJncmFwaCBEYXRhIEZsb3dcbiAgICAgICAgSltVc2VyIFByb2ZpbGUgQ2hhbmdlc10gLS0-IEI7XG4gICAgICAgIEMgLS0gSFRUUCBSZXF1ZXN0IC0tPiBFO1xuICAgICAgICBFIC0tIEpTT04gUmVzcG9uc2UgLS0-IEM7XG4gICAgZW5kXG5cbiAgICBzdHlsZSBGcm9udGVuZCBmaWxsOiNFNkY3RkYsc3Ryb2tlOiNCM0Q5RkYsc3Ryb2tlLXdpZHRoOjJweFxuICAgIHN0eWxlIEJhY2tlbmQgZmlsbDojRThGNUU5LHN0cm9rZTojQTVENkE3LHN0cm9rZS13aWR0aDoycHhcbiAgICBzdHlsZSBEYXRhIEZsb3cgZmlsbDojRkZGOEUxLHN0cm9rZTojRkZFQ0IzLHN0cm9rZS13aWR0aDoycHgiLCJtZXJtYWlkIjp7InRoZW1lIjoiZGVmYXVsdCJ9LCJ1cGRhdGVFZGl0b3IiOmZhbHNlLCJhdXRvU3luYyI6dHJ1ZSwidXBkYXRlRGlhZ3JhbSI6ZmFsc2V9)
+
+---
+
+## Features
+
+-   **Personalized Recommendations**: Leverages a vector database (Pinecone) to find bills that semantically match a user's unique profile, including their interests, location, and occupation.
+-   **AI-Generated Summaries**: Uses a Large Language Model (Groq) to generate concise, easy-to-understand summaries of bills, personalized to be relevant to the user.
+-   **Dynamic Profile Updates**: Seamlessly updates recommendations when a user changes their profile interests.
+-   **SwiftUI Frontend**: A modern, reactive iOS application built with SwiftUI and the MVVM pattern.
+-   **FastAPI Backend**: A robust and efficient Python backend serving the recommendation engine.
+
+---
+
+## Architecture
+
+The project is a monorepo containing two main components: a SwiftUI frontend and a Python backend.
+
+### Frontend (iOS App)
+
+-   **Language**: Swift
+-   **UI Framework**: SwiftUI
+-   **Architecture**: Model-View-ViewModel (MVVM)
+    -   **Views**: SwiftUI views define the UI and bind to ViewModel properties.
+    -   **ViewModels**: Contain the presentation logic and state for the views.
+    -   **Models**: Represent the data structures of the app (e.g., `Bill`, `UserProfile`).
+    -   **Services**: Handle networking (`BillService`, `UserService`) and other shared logic (`NotificationService`).
+-   **Data Persistence**: `UserDefaults` is used to persist the user's profile locally.
+-   **Concurrency**: `Combine` and `async/await` are used for managing asynchronous operations and state updates.
+
+### Backend (Python Server)
+
+-   **Framework**: FastAPI
+-   **Database**: Pinecone (Vector Database for semantic search)
+-   **AI Services**:
+    -   **OpenAI**: Used to generate vector embeddings for text data.
+    -   **Groq**: Used to generate personalized bill summaries with a fast LLM.
+-   **Core Logic**: The `BillRecommender` class in `RAG/` encapsulates the logic for querying the vector database and formatting results.
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+-   macOS with Xcode installed.
+-   Python 3.8+
+-   `pip` for Python package management.
+
+### 1. Backend Setup
+
+First, set up and run the Python server.
+
+1.  **Navigate to the Backend Directory**:
+    ```bash
+    cd InShort
+    ```
+
+2.  **Create an Environment File**:
+    Create a file named `.env` in the `InShort/` directory and add your API keys:
+    ```
+    PINECONE_API_KEY="YOUR_PINECONE_KEY"
+    OPENAI_API_KEY="YOUR_OPENAI_KEY"
+    GROQ_API_KEY="YOUR_GROQ_KEY"
+    ```
+
+3.  **Install Dependencies**:
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+4.  **Populate the Database**:
+    Run the upsert script to populate your Pinecone index with bill data. Make sure your Pinecone index is configured for 384 dimensions to match the `text-embedding-3-small` model.
+    ```bash
+    python3 RAG/pcupsert.py
+    ```
+
+5.  **Run the Server**:
+    ```bash
+    uvicorn api:app --reload
+    ```
+    The server will be running at `http://127.0.0.1:8000`.
+
+### 2. Frontend Setup
+
+With the backend running, you can now launch the iOS application.
+
+1.  **Navigate to the Frontend Project**:
+    ```bash
+    cd ../InShortFrontEnd
+    ```
+
+2.  **Open in Xcode**:
+    Open the `InShort.xcodeproj` file in Xcode.
+    ```bash
+    open InShort.xcodeproj
+    ```
+
+3.  **Build and Run**:
+    Select an iOS Simulator (e.g., iPhone 15 Pro) or a physical device and press the "Run" button (or `Cmd+R`). The app will launch and connect to your local backend.
+
+---
+
+## Project Structure
+
+```
+.
+├── InShort/                  # Python Backend
+│   ├── api.py                # FastAPI application endpoints
+│   ├── requirements.txt      # Python dependencies
+│   ├── .env.example          # Example environment file
+│   └── RAG/
+│       ├── billRecommender.py  # Core recommendation logic
+│       └── pcupsert.py         # Script to populate Pinecone
+│
+└── InShortFrontEnd/          # iOS Frontend
+    └── InShort/
+        ├── InShort.xcodeproj   # Xcode Project
+        └── InShort/
+            ├── Models/         # Data models (Bill, UserProfile)
+            ├── ViewModels/     # ViewModel layer (NewsViewModel, etc.)
+            ├── Views/          # SwiftUI views
+            └── Services/       # Networking and data services
+```
 
 ## Prerequisites
 
