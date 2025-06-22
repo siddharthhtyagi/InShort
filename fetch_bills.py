@@ -270,6 +270,389 @@ def get_bill_details(congress: str, bill_type: str, bill_number: str) -> Dict[st
         return {'error': f'Unexpected error: {str(e)}'}
     
 @tool
+def get_bill_cosponsors(
+    congress: int,
+    bill_type: str,
+    bill_number: int,
+    format: str = "json",
+    offset: Optional[int] = 0,
+    limit: Optional[int] = 20,
+    from_date_time: Optional[str] = None,
+    to_date_time: Optional[str] = None,
+    sort: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Get the list of cosponsors for a specified bill in Congress.
+    
+    Args:
+        congress: The congress number (e.g., 117, 118, 119)
+        bill_type: Type of bill (hr, s, hjres, sjres, hconres, sconres, hres, sres)
+        bill_number: The bill's assigned number
+        format: Data format (xml or json, default: json)
+        offset: Starting record number (default: 0)
+        limit: Number of records to return (max: 250, default: 20)
+        from_date_time: Filter start date (YYYY-MM-DDTHH:MM:SSZ format)
+        to_date_time: Filter end date (YYYY-MM-DDTHH:MM:SSZ format)
+        sort: Sort order (updateDate+asc or updateDate+desc)
+    
+    Returns:
+        Dictionary containing the API response with cosponsors data
+    """
+    
+    # Check for API key first
+    if not API_KEY or API_KEY.strip() == "":
+        return {
+            "error": "API key is not configured",
+            "success": False
+        }
+    
+    # Validate bill type
+    valid_bill_types = ['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres']
+    if bill_type.lower() not in valid_bill_types:
+        return {
+            "error": f"Invalid bill type '{bill_type}'. Must be one of: {', '.join(valid_bill_types)}",
+            "success": False
+        }
+    
+    # Validate format
+    if format.lower() not in ['json', 'xml']:
+        return {"error": "Format must be 'json' or 'xml'", "success": False}
+    
+    # Validate limit
+    if limit and (limit < 1 or limit > 250):
+        return {"error": "Limit must be between 1 and 250", "success": False}
+    
+    # Validate sort parameter
+    if sort and sort not in ['updateDate+asc', 'updateDate+desc']:
+        return {"error": "Sort must be 'updateDate+asc' or 'updateDate+desc'", "success": False}
+    
+    # Build the API URL using the configured base URL
+    endpoint = f"/{congress}/{bill_type.lower()}/{bill_number}/cosponsors"
+    url = BASE_URL + endpoint
+    
+    # Build query parameters
+    params = {
+        'format': format.lower()
+    }
+    
+    if offset is not None:
+        params['offset'] = offset
+    if limit is not None:
+        params['limit'] = limit
+    if from_date_time:
+        params['fromDateTime'] = from_date_time
+    if to_date_time:
+        params['toDateTime'] = to_date_time
+    if sort:
+        params['sort'] = sort
+    
+    # Set up headers with the configured API key
+    headers = {
+        'User-Agent': 'Congress-Bill-Cosponsors-Tool/1.0',
+        'X-API-Key': API_KEY
+    }
+    
+    try:
+        # Make the API request
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        if format.lower() == 'json':
+            data = response.json()
+            
+            # Extract useful information for easier consumption
+            result = {
+                "success": True,
+                "url": url,
+                "params": params,
+                "raw_data": data
+            }
+            
+            # Add summary information if available
+            if 'cosponsors' in data:
+                result["summary"] = {
+                    "total_cosponsors": len(data.get('cosponsors', [])),
+                    "congress": congress,
+                    "bill_type": bill_type,
+                    "bill_number": bill_number
+                }
+                
+                # Extract cosponsor names for quick reference
+                cosponsors = data.get('cosponsors', [])
+                result["cosponsor_names"] = []
+                
+                for cosponsor in cosponsors:
+                    name_parts = []
+                    if 'firstName' in cosponsor:
+                        name_parts.append(cosponsor['firstName'])
+                    if 'middleName' in cosponsor:
+                        name_parts.append(cosponsor['middleName'])
+                    if 'lastName' in cosponsor:
+                        name_parts.append(cosponsor['lastName'])
+                    
+                    full_name = ' '.join(name_parts)
+                    if full_name:
+                        party = cosponsor.get('party', '')
+                        state = cosponsor.get('state', '')
+                        district = cosponsor.get('district', '')
+                        
+                        cosponsor_info = full_name
+                        if party or state:
+                            details = []
+                            if party:
+                                details.append(party)
+                            if state:
+                                if district:
+                                    details.append(f"{state}-{district}")
+                                else:
+                                    details.append(state)
+                            cosponsor_info += f" ({', '.join(details)})"
+                        
+                        result["cosponsor_names"].append(cosponsor_info)
+            
+            return result
+        else:
+            # Return XML as text
+            return {
+                "success": True,
+                "url": url,
+                "params": params,
+                "data": response.text,
+                "content_type": "xml"
+            }
+            
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            return {
+                "success": False,
+                "error": "403 Forbidden: Invalid or missing API key. Get one at https://api.congress.gov/sign-up/",
+                "url": url,
+                "params": params
+            }
+        elif e.response.status_code == 404:
+            return {
+                "success": False,
+                "error": f"404 Not Found: Bill {bill_type.upper()} {bill_number} not found in Congress {congress}",
+                "url": url,
+                "params": params
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {e.response.status_code}: {str(e)}",
+                "url": url,
+                "params": params
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "error": f"API request failed: {str(e)}",
+            "url": url,
+            "params": params
+        }
+    except json.JSONDecodeError as e:
+        return {
+            "success": False,
+            "error": f"Failed to parse JSON response: {str(e)}",
+            "url": url,
+            "params": params
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}",
+            "url": url,
+            "params": params
+        }
+
+@tool
+def get_bill_summaries(
+    congress: int,
+    bill_type: str,
+    bill_number: int,
+    format: str = "json",
+    offset: Optional[int] = 0,
+    limit: Optional[int] = 20
+) -> Dict[str, Any]:
+    """
+    Get the list of summaries for a specified bill in Congress.
+    
+    Args:
+        congress: The congress number (e.g., 117, 118, 119)
+        bill_type: Type of bill (hr, s, hjres, sjres, hconres, sconres, hres, sres)
+        bill_number: The bill's assigned number
+        format: Data format (xml or json, default: json)
+        offset: Starting record number (default: 0)
+        limit: Number of records to return (max: 250, default: 20)
+    
+    Returns:
+        Dictionary containing the API response with bill summaries data
+    """
+    
+    # Check for API key first
+    if not API_KEY or API_KEY.strip() == "":
+        return {
+            "error": "API key is not configured",
+            "success": False
+        }
+    
+    # Validate bill type
+    valid_bill_types = ['hr', 's', 'hjres', 'sjres', 'hconres', 'sconres', 'hres', 'sres']
+    if bill_type.lower() not in valid_bill_types:
+        return {
+            "error": f"Invalid bill type '{bill_type}'. Must be one of: {', '.join(valid_bill_types)}",
+            "success": False
+        }
+    
+    # Validate format
+    if format.lower() not in ['json', 'xml']:
+        return {"error": "Format must be 'json' or 'xml'", "success": False}
+    
+    # Validate limit
+    if limit and (limit < 1 or limit > 250):
+        return {"error": "Limit must be between 1 and 250", "success": False}
+    
+    # Build the API URL using the configured base URL
+    endpoint = f"/{congress}/{bill_type.lower()}/{bill_number}/summaries"
+    url = BASE_URL + endpoint
+    
+    # Build query parameters
+    params = {
+        'format': format.lower()
+    }
+    
+    if offset is not None:
+        params['offset'] = offset
+    if limit is not None:
+        params['limit'] = limit
+    
+    # Set up headers with the configured API key
+    headers = {
+        'User-Agent': 'Congress-Bill-Summaries-Tool/1.0',
+        'X-API-Key': API_KEY
+    }
+    
+    try:
+        # Make the API request
+        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response.raise_for_status()
+        
+        if format.lower() == 'json':
+            data = response.json()
+            
+            # Extract useful information for easier consumption
+            result = {
+                "success": True,
+                "url": url,
+                "params": params,
+                "raw_data": data
+            }
+            
+            # Add summary information if available
+            if 'summaries' in data:
+                summaries = data.get('summaries', [])
+                result["summary"] = {
+                    "total_summaries": len(summaries),
+                    "congress": congress,
+                    "bill_type": bill_type,
+                    "bill_number": bill_number
+                }
+                
+                # Extract summary details for quick reference
+                result["summary_details"] = []
+                
+                for summary in summaries:
+                    summary_info = {}
+                    
+                    # Basic info
+                    if 'name' in summary:
+                        summary_info['name'] = summary['name']
+                    if 'date' in summary:
+                        summary_info['date'] = summary['date']
+                    if 'updateDate' in summary:
+                        summary_info['update_date'] = summary['updateDate']
+                    if 'versionCode' in summary:
+                        summary_info['version_code'] = summary['versionCode']
+                    
+                    # Summary text
+                    if 'text' in summary:
+                        summary_text = summary['text']
+                        summary_info['text_length'] = len(summary_text)
+                        # Include first 500 characters as preview
+                        summary_info['text_preview'] = summary_text[:500] + "..." if len(summary_text) > 500 else summary_text
+                        summary_info['full_text'] = summary_text
+                    
+                    # Action date and description
+                    if 'actionDate' in summary:
+                        summary_info['action_date'] = summary['actionDate']
+                    if 'actionDesc' in summary:
+                        summary_info['action_description'] = summary['actionDesc']
+                    
+                    result["summary_details"].append(summary_info)
+                
+                # Sort summaries by date (most recent first)
+                result["summary_details"].sort(
+                    key=lambda x: x.get('date', ''), 
+                    reverse=True
+                )
+            
+            return result
+        else:
+            # Return XML as text
+            return {
+                "success": True,
+                "url": url,
+                "params": params,
+                "data": response.text,
+                "content_type": "xml"
+            }
+            
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            return {
+                "success": False,
+                "error": "403 Forbidden: Invalid or missing API key",
+                "url": url,
+                "params": params
+            }
+        elif e.response.status_code == 404:
+            return {
+                "success": False,
+                "error": f"404 Not Found: Bill {bill_type.upper()} {bill_number} not found in Congress {congress} or no summaries available",
+                "url": url,
+                "params": params
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"HTTP {e.response.status_code}: {str(e)}",
+                "url": url,
+                "params": params
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "error": f"API request failed: {str(e)}",
+            "url": url,
+            "params": params
+        }
+    except json.JSONDecodeError as e:
+        return {
+            "success": False,
+            "error": f"Failed to parse JSON response: {str(e)}",
+            "url": url,
+            "params": params
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Unexpected error: {str(e)}",
+            "url": url,
+            "params": params
+        }
+
+
+'''@tool
 def get_bills_by_sponsor(sponsor_name: str, limit: int = 10, congress: int = 118) -> List[Dict[str, Any]]:
     """
     Find bills sponsored by a specific member of Congress.
@@ -347,7 +730,7 @@ congress_tools = [
     get_bills_by_sponsor,
     get_bills_by_subject
 ]
-
+'''
 # Example usage in a LangGraph workflow
 if __name__ == "__main__":
     # Test the tools

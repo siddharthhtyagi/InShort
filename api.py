@@ -1,14 +1,18 @@
 import os
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Any
 from dotenv import load_dotenv
 from RAG.billRecommender import BillRecommender
+import inShort_agent as agent
 
 # Load environment variables from .env file
 load_dotenv()
 
 app = FastAPI()
+
+# Initialize the agent graph
+agent_graph = agent.create_agent_graph()
 
 # Pydantic model for user profile
 class UserProfile(BaseModel):
@@ -17,6 +21,11 @@ class UserProfile(BaseModel):
     location: str = "United States"
     interests: List[str] = Field(..., example=["student loans", "healthcare"])
     occupation: str = "citizen"
+
+class ChatRequest(BaseModel):
+    user_input: str
+    session_id: str
+    user_profile: Dict[str, Any]
 
 # Initialize BillRecommender
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
@@ -45,6 +54,23 @@ async def get_recommendations(user_profile: UserProfile):
         
         return recommendations
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/chat/")
+async def chat_with_agent(request: ChatRequest):
+    """
+    Have a conversation with the bill agent.
+    """
+    try:
+        config = {"configurable": {"thread_id": request.session_id}}
+        response = agent.run_agent(
+            graph=agent_graph,
+            config=config,
+            user_input=request.user_input,
+            user_profile=request.user_profile
+        )
+        return {"response": response}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
