@@ -21,7 +21,7 @@ load_dotenv()
 class BillUpsertProcessor:
     """Processes bill data and upserts to Pinecone"""
 
-    def __init__(self, pinecone_api_key: str, index_name: str = "bills"):
+    def __init__(self, pinecone_api_key: str, index_name: str = "bills-index"):
         """Initialize the processor with Pinecone connection"""
         self.pc = Pinecone(api_key=pinecone_api_key)
         self.index = self.pc.Index(index_name)
@@ -38,7 +38,7 @@ class BillUpsertProcessor:
                 response = client.embeddings.create(
                     input=text,
                     model="text-embedding-3-small",
-                    dimensions=1024,  # Match your Pinecone index dimension
+                    dimensions=384,  # Match the Pinecone index dimension
                 )
                 return response.data[0].embedding
             else:
@@ -57,59 +57,70 @@ class BillUpsertProcessor:
         seed = int(hashlib.md5(text.encode()).hexdigest()[:8], 16)
         random.seed(seed)
 
-        # Generate a 1024-dimensional embedding to match Pinecone index
-        embedding = [random.uniform(-1, 1) for _ in range(1024)]
+        # Generate a 384-dimensional embedding to match Pinecone index
+        embedding = [random.uniform(-1, 1) for _ in range(384)]
         return embedding
 
     def extract_bill_text(self, bill_data: Dict) -> str:
-        """Extract meaningful text content from bill data"""
+        """Extract rich text content from bill data for semantic embedding"""
+        import re
         text_parts = []
 
-        # Add bill title
-        if "bill" in bill_data and "title" in bill_data["bill"]:
-            text_parts.append(f"Title: {bill_data['bill']['title']}")
+        bill = bill_data.get("bill", {})
 
-        # Add summary if available
-        if (
-            "summaries_details" in bill_data
-            and "summaries" in bill_data["summaries_details"]
-        ):
-            for summary in bill_data["summaries_details"]["summaries"]:
-                if "text" in summary:
-                    # Clean HTML tags from summary text
-                    import re
+        # Title
+        if title := bill.get("title"):
+            text_parts.append(f"Title: {title}")
 
-                    clean_text = re.sub(r"<[^>]+>", "", summary["text"])
-                    text_parts.append(f"Summary: {clean_text}")
+        # Summary
+        summaries = bill_data.get("summaries_details", {}).get("summaries", [])
+        for summary in summaries:
+            summary_text = summary.get("text", "")
+            clean_text = re.sub(r"<[^>]+>", "", summary_text)
+            if clean_text.strip():
+                text_parts.append(f"Summary: {clean_text}")
 
-        # Add sponsor information
-        if "bill" in bill_data and "sponsors" in bill_data["bill"]:
-            sponsors = []
-            for sponsor in bill_data["bill"]["sponsors"]:
-                if "fullName" in sponsor:
-                    sponsors.append(sponsor["fullName"])
-            if sponsors:
-                text_parts.append(f"Sponsors: {', '.join(sponsors)}")
+        # Sponsors
+        sponsors = bill.get("sponsors", [])
+        sponsor_names = [s.get("fullName") for s in sponsors if s.get("fullName")]
+        if sponsor_names:
+            text_parts.append(f"Sponsors: {', '.join(sponsor_names)}")
 
-        # Add policy area
-        if (
-            "bill" in bill_data
-            and "policyArea" in bill_data["bill"]
-            and "name" in bill_data["bill"]["policyArea"]
-        ):
-            text_parts.append(f"Policy Area: {bill_data['bill']['policyArea']['name']}")
+        # Cosponsors
+        cosponsors = bill_data.get("cosponsors_details", {}).get("cosponsors", [])
+        cosponsor_list = [
+            f"{c['fullName']} ({c['party']}-{c['state']})"
+            for c in cosponsors if "fullName" in c
+        ]
+        if cosponsor_list:
+            text_parts.append(f"Cosponsors: {', '.join(cosponsor_list)}")
 
-        # Add latest action
-        if (
-            "bill" in bill_data
-            and "latestAction" in bill_data["bill"]
-            and "text" in bill_data["bill"]["latestAction"]
-        ):
-            text_parts.append(
-                f"Latest Action: {bill_data['bill']['latestAction']['text']}"
-            )
+        # Policy Area
+        if policy := bill.get("policyArea", {}).get("name"):
+            text_parts.append(f"Policy Area: {policy}")
 
-        return " | ".join(text_parts)
+        # Subjects
+        subjects = bill_data.get("subjects_details", {}).get("subjects", {}).get("legislativeSubjects", [])
+        subject_names = [s.get("name") for s in subjects if s.get("name")]
+        if subject_names:
+            text_parts.append(f"Subjects: {', '.join(subject_names)}")
+
+        # Latest Action
+        if latest_action := bill.get("latestAction", {}).get("text"):
+            text_parts.append(f"Latest Action: {latest_action}")
+
+        # Action history
+        actions = bill_data.get("actions_details", {}).get("actions", [])
+        action_descriptions = []
+        for act in actions:
+            action_text = act.get("text")
+            action_date = act.get("actionDate")
+            if action_text and action_date:
+                action_descriptions.append(f"[{action_date}] {action_text}")
+        if action_descriptions:
+            text_parts.append(f"Action History: {' | '.join(action_descriptions)}")
+
+        return "\n".join(text_parts)
 
     def create_bill_metadata(self, bill_data: Dict) -> Dict:
         """Extract metadata for the bill"""
@@ -119,8 +130,8 @@ class BillUpsertProcessor:
             bill = bill_data["bill"]
             metadata.update(
                 {
-                    "bill_number": bill.get("number", ""),
-                    "bill_type": bill.get("type", ""),
+                    "bill_number": f"{bill.get('type', '')}-{bill.get('number', '')}",
+                    "type": bill.get("type", ""),
                     "congress": bill.get("congress", ""),
                     "introduced_date": bill.get("introducedDate", ""),
                     "origin_chamber": bill.get("originChamber", ""),
@@ -133,7 +144,7 @@ class BillUpsertProcessor:
             # Add sponsor info
             if "sponsors" in bill and bill["sponsors"]:
                 sponsor = bill["sponsors"][0]  # Primary sponsor
-                metadata["primary_sponsor"] = sponsor.get("fullName", "")
+                metadata["sponsor"] = f"Sponsored by {sponsor.get('fullName', '')}"
                 metadata["sponsor_party"] = sponsor.get("party", "")
                 metadata["sponsor_state"] = sponsor.get("state", "")
 
@@ -141,9 +152,21 @@ class BillUpsertProcessor:
             if "policyArea" in bill and "name" in bill["policyArea"]:
                 metadata["policy_area"] = bill["policyArea"]["name"]
 
-            # Add latest action date
-            if "latestAction" in bill and "actionDate" in bill["latestAction"]:
-                metadata["latest_action_date"] = bill["latestAction"]["actionDate"]
+            # Add latest action
+            if "latestAction" in bill:
+                metadata["latest_action"] = bill["latestAction"].get("text", "")
+                metadata["latest_action_date"] = bill["latestAction"].get("actionDate", "")
+
+            # Add summary if available
+            summary = ""
+            if 'summaries_details' in bill_data:
+                summaries = bill_data['summaries_details'].get('summaries', [])
+                if summaries:
+                    summary_text = summaries[0].get('text', '')
+                    # Clean HTML tags from summary
+                    import re
+                    summary = re.sub(r"<[^>]+>", "", summary_text)
+            metadata["summary"] = summary
 
         return metadata
 
@@ -175,7 +198,7 @@ class BillUpsertProcessor:
                 metadata = self.create_bill_metadata(bill_data)
 
                 # Create vector ID
-                bill_id = f"bill_{metadata.get('congress', 'unknown')}_{metadata.get('bill_type', 'unknown')}{metadata.get('bill_number', i)}"
+                bill_id = f"bill_{metadata.get('congress', 'unknown')}_{metadata.get('type', 'unknown')}{metadata.get('bill_number', i)}"
 
                 # Add to vectors list
                 vectors.append(
@@ -225,7 +248,7 @@ def main():
         return
 
     # Initialize processor
-    processor = BillUpsertProcessor(pinecone_api_key)
+    processor = BillUpsertProcessor(pinecone_api_key, index_name="bills-index")
 
     # Process bills
     json_file_path = "../inshort_bills.json"  # Relative to RAG directory

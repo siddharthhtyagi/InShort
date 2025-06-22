@@ -188,4 +188,96 @@ The scripts include rate limiting to stay within these limits.
 
 ## Legal Notice
 
-This tool is for educational and research purposes. Please respect the Congress.gov and Groq API terms of service and rate limits. The bill data is provided by the United States Congress and is in the public domain. 
+This tool is for educational and research purposes. Please respect the Congress.gov and Groq API terms of service and rate limits. The bill data is provided by the United States Congress and is in the public domain.
+
+## RAG System and Bill Recommender
+
+InShort now includes a RAG (Retrieval-Augmented Generation) system that uses Pinecone for vector storage and Groq for generating summaries.
+
+### Prerequisites for RAG System
+
+1. **Pinecone API Key**: Get a free API key from [Pinecone](https://www.pinecone.io/)
+   - Visit https://www.pinecone.io/
+   - Sign up for a free account
+   - Generate your API key
+
+2. **OpenAI API Key**: For generating embeddings
+   - Visit https://platform.openai.com/
+   - Generate your API key
+
+Set your additional API keys:
+
+```bash
+# Set Pinecone API key
+export PINECONE_API_KEY="your_pinecone_api_key_here"
+
+# Set OpenAI API key (for embeddings)
+export OPENAI_API_KEY="your_openai_api_key_here"
+```
+
+### Step 4: Store Bills in Vector Database
+
+First, update the bills in Pinecone with summaries:
+
+```bash
+python3 upsert_bills.py
+```
+
+This will:
+- Read the bill data from `inshort_bills.json`
+- Extract summaries from the bill data
+- Generate embeddings for each bill
+- Store everything in Pinecone with metadata including summaries
+
+### Step 5: Test Bill Recommender
+
+Test the bill recommender with Groq integration:
+
+```bash
+python3 test_bill_recommender.py
+```
+
+Or run the recommender directly:
+
+```bash
+python3 RAG/billRecommender.py
+```
+
+### Bill Recommender Features
+
+The updated `BillRecommender` class provides:
+
+1. **Vector Search**: Uses embeddings to find relevant bills based on user interests
+2. **Groq Integration**: Automatically generates summaries using Groq when not available in metadata
+3. **Personalized Recommendations**: Returns bills ranked by relevance to user interests
+4. **Comprehensive Metadata**: Includes bill title, sponsor, congress, and summary
+
+### Example RAG Output
+
+```
+Based on your interests, we recommend the following bills:
+
+#1 - HR1234 (Score: 0.856)
+📋 Title: Student Loan Forgiveness Act
+👤 Sponsor: Sponsored by John Smith
+🏛️ Congress: 119
+📖 Summary: This bill expands student loan forgiveness programs for graduates working in public service. It could save you thousands of dollars on your student debt if you work in education, healthcare, or government for 10 years. This affects you.
+--------------------------------------------------
+```
+
+### RAG System Architecture
+
+- **Vector Storage**: Pinecone stores bill embeddings and metadata
+- **Embedding Generation**: OpenAI's text-embedding-3-small model
+- **Summary Generation**: Groq's llama3-8b-8192 model
+- **Retrieval**: Semantic search based on user interests
+- **Generation**: AI-generated summaries when not available in metadata
+
+### Customizing the RAG System
+
+You can modify the `BillRecommender` class to:
+
+1. **Change Search Parameters**: Adjust `top_k` and `min_score` thresholds
+2. **Customize Summaries**: Modify the Groq prompt for different summary styles
+3. **Add User Profiles**: Integrate with the personalized summarizer
+4. **Filter Results**: Add additional filtering based on bill status, date, etc. 
