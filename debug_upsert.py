@@ -1,5 +1,4 @@
 import json
-import os
 from pinecone import Pinecone, ServerlessSpec
 from sentence_transformers import SentenceTransformer
 
